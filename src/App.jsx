@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import * as XLSX from "xlsx";
 
 const CFG_BASE  = "appTVlVjKPvZ6VSAt";
+const ANTHROPIC_KEY = typeof __ANTHROPIC_KEY__ !== "undefined" ? __ANTHROPIC_KEY__ : "";
 const CFG_TABLE = "tbl6iZQbNEddYvfn3";
 const CFG_FLD   = {
   mouserKey:"fldeEz6qCd7BRFnsu", e14Key:"fldJOYFsaxcrvMo6R",
@@ -230,7 +231,7 @@ export default function App() {
     try {
       const resp = await fetch("https://api.anthropic.com/v1/messages", {
         method:"POST",
-        headers:{ "Content-Type":"application/json" },
+        headers:{ "Content-Type":"application/json", "x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
         body: JSON.stringify({
           model:"claude-sonnet-4-6",
           max_tokens:4000,
@@ -294,7 +295,7 @@ export default function App() {
       try {
         var resp = await fetch(workerUrl + "?action=price", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", "x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
           body: JSON.stringify({ pn: r.pn, mfr: r.mfr, qty: r.qty }),
         });
         if (!resp.ok) throw new Error("Worker HTTP " + resp.status);
@@ -372,7 +373,7 @@ export default function App() {
     try {
       const resp = await fetch("https://api.anthropic.com/v1/messages", {
         method:"POST",
-        headers:{ "Content-Type":"application/json" },
+        headers:{ "Content-Type":"application/json", "x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
         body: JSON.stringify({
           model:"claude-sonnet-4-6",
           max_tokens:1000,
