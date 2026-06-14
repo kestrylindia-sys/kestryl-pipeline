@@ -227,14 +227,14 @@ export default function App() {
     if (!pdfB64) { addExtLog("No PDF loaded.", "err"); return; }
     setExtractState("loading");
     addExtLog("Sending PDF to Claude API…", "info");
-    const prompt = "Extract all information from this ECIL/BEL/HAL/DRDO RFQ PDF and return ONLY valid JSON (no markdown) in this exact structure: {\"rfqNumber\":\"\",\"buyer\":\"\",\"dept\":\"\",\"scope\":\"\",\"deadline\":\"\",\"bidOpening\":\"\",\"delivery\":\"\",\"payment\":\"\",\"warranty\":\"\",\"ld\":\"\",\"coc\":\"\",\"emd\":\"\",\"bidValidity\":\"\",\"optionClause\":\"\",\"evaluation\":\"\",\"consignee\":\"\",\"bom\":[{\"id\":1,\"pn\":\"\",\"desc\":\"\",\"mfr\":\"\",\"cat\":\"\",\"qty\":0,\"delivery\":\"\"}],\"tc\":[{\"label\":\"\",\"val\":\"\"}],\"compliance\":[{\"item\":\"\",\"req\":\"\",\"status\":\"ok\"}]}";
+    const prompt = "Extract from this RFQ PDF. Return ONLY compact JSON (no markdown, no whitespace). Max 15 tc items, max 8 compliance items, keep values concise. Structure: {\"rfqNumber\":\"\",\"buyer\":\"\",\"dept\":\"\",\"scope\":\"\",\"deadline\":\"\",\"bidOpening\":\"\",\"delivery\":\"\",\"payment\":\"\",\"warranty\":\"\",\"ld\":\"\",\"coc\":\"\",\"emd\":\"\",\"bidValidity\":\"\",\"optionClause\":\"\",\"evaluation\":\"\",\"consignee\":\"\",\"bom\":[{\"id\":1,\"pn\":\"\",\"desc\":\"\",\"mfr\":\"\",\"cat\":\"\",\"qty\":0,\"delivery\":\"\"}],\"tc\":[{\"label\":\"\",\"val\":\"\"}],\"compliance\":[{\"item\":\"\",\"req\":\"\",\"status\":\"ok\"}]}";
     try {
       const resp = await fetch("https://api.anthropic.com/v1/messages", {
         method:"POST",
         headers:{ "Content-Type":"application/json", "x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
         body: JSON.stringify({
           model:"claude-sonnet-4-6",
-          max_tokens:4000,
+          max_tokens:8000,
           messages:[{ role:"user", content:[
             { type:"document", source:{ type:"base64", media_type:"application/pdf", data:pdfB64 } },
             { type:"text", text:prompt }
