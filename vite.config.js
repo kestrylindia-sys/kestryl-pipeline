@@ -6,9 +6,17 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [react()],
     define: {
-      __WORKER_URL__:   JSON.stringify(env.VITE_WORKER_URL  || ""),
+      __WORKER_URL__:   JSON.stringify(env.VITE_WORKER_URL   || ""),
       __AIRTABLE_PAT__: JSON.stringify(env.VITE_AIRTABLE_PAT || ""),
     },
-    build: { outDir: 'dist' },
+    build: {
+      outDir: 'dist',
+      rollupOptions: {
+        onwarn(warning, warn) {
+          if (warning.code === 'MODULE_LEVEL_DIRECTIVE') return;
+          warn(warning);
+        }
+      }
+    },
   }
 })

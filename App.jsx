@@ -938,7 +938,7 @@ export default function App() {
             </Panel>
             <div style={{ display:"flex", gap:10, justifyContent:"flex-end" }}>
               <Btn v="secondary" onClick={function(){setStep(4);}}>← Back</Btn>
-              <Btn v="green" onClick={function(){ sendPrompt("Pipeline complete for " + (rfq?rfq.rfqNumber:"this tender") + ". BOM: " + bom.length + " items, Bid: " + fmt(totals.toFixed(0)) + " ex-GST, Deadline: " + (rfq?rfq.deadline:"—") + ". What are my critical next steps?"); }}>
+              <Btn v="green" onClick={function(){ alert("Pipeline complete for " + (rfq?rfq.rfqNumber:"this tender") + "\nBOM: " + bom.length + " items | Bid: " + fmt(totals.toFixed(0)) + " ex-GST\nDeadline: " + (rfq?rfq.deadline:"—") + "\n\nRecord logged to Airtable. Download .xlsx for submission reference."); }}>
                 ✅ Complete — Get Submission Plan
               </Btn>
             </div>
