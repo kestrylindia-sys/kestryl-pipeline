@@ -6,17 +6,10 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [react()],
     define: {
-      __WORKER_URL__:   JSON.stringify(env.VITE_WORKER_URL   || ""),
-      __AIRTABLE_PAT__: JSON.stringify(env.VITE_AIRTABLE_PAT || ""),
+      __WORKER_URL__:    JSON.stringify(env.VITE_WORKER_URL    || ""),
+      __AIRTABLE_PAT__:  JSON.stringify(env.VITE_AIRTABLE_PAT  || ""),
+      __ANTHROPIC_KEY__: JSON.stringify(env.VITE_ANTHROPIC_KEY || ""),
     },
-    build: {
-      outDir: 'dist',
-      rollupOptions: {
-        onwarn(warning, warn) {
-          if (warning.code === 'MODULE_LEVEL_DIRECTIVE') return;
-          warn(warning);
-        }
-      }
-    },
+    build: { outDir: 'dist' },
   }
 })
