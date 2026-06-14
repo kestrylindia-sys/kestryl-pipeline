@@ -2,7 +2,6 @@ import { useState, useRef, useEffect } from "react";
 import * as XLSX from "xlsx";
 
 const CFG_BASE  = "appTVlVjKPvZ6VSAt";
-const ANTHROPIC_KEY = typeof __ANTHROPIC_KEY__ !== "undefined" ? __ANTHROPIC_KEY__ : "";
 const CFG_TABLE = "tbl6iZQbNEddYvfn3";
 const CFG_FLD   = {
   mouserKey:"fldeEz6qCd7BRFnsu", e14Key:"fldJOYFsaxcrvMo6R",
@@ -12,9 +11,9 @@ const CFG_FLD   = {
 };
 
 const AT_BASES = [
+  { id:"appAsHtfvYnOftbSa", name:"Kestryl RFQ Tracker" },
   { id:"appqDBdhwiFxlRS6Y", name:"Kestryl India - Operations Hub" },
   { id:"appelQ6k1OmDGihcp", name:"Tender & Procurement Management" },
-  { id:"appAsHtfvYnOftbSa", name:"Kestryl RFQ Tracker" },
   { id:"appgb3I0tRORlTYvX", name:"RFQ Management" },
 ];
 
@@ -227,14 +226,22 @@ export default function App() {
     if (!pdfB64) { addExtLog("No PDF loaded.", "err"); return; }
     setExtractState("loading");
     addExtLog("Sending PDF to Claude API…", "info");
-    const prompt = "Extract from this RFQ PDF. Return ONLY compact JSON (no markdown, no whitespace). Max 15 tc items, max 8 compliance items, keep values concise. Structure: {\"rfqNumber\":\"\",\"buyer\":\"\",\"dept\":\"\",\"scope\":\"\",\"deadline\":\"\",\"bidOpening\":\"\",\"delivery\":\"\",\"payment\":\"\",\"warranty\":\"\",\"ld\":\"\",\"coc\":\"\",\"emd\":\"\",\"bidValidity\":\"\",\"optionClause\":\"\",\"evaluation\":\"\",\"consignee\":\"\",\"bom\":[{\"id\":1,\"pn\":\"\",\"desc\":\"\",\"mfr\":\"\",\"cat\":\"\",\"qty\":0,\"delivery\":\"\"}],\"tc\":[{\"label\":\"\",\"val\":\"\"}],\"compliance\":[{\"item\":\"\",\"req\":\"\",\"status\":\"ok\"}]}";
+    const prompt = "Extract all information from this RFQ/Bid Invitation PDF (ECIL/BEL/HAL/DRDO format) and return ONLY compact valid JSON (no markdown). "
+      + "IMPORTANT for BEL format: Each line item may list multiple approved makes/manufacturers (e.g. KEMET C0603C102J4RACTU and VISHAY VJ0603Y102JXJAT for the same material code). "
+      + "Extract ALL approved makes as separate entries in the makes[] array. The goal is to price all approved makes and select the cheapest. "
+      + "Structure: {\"rfqNumber\":\"\",\"buyer\":\"\",\"dept\":\"\",\"scope\":\"\",\"deadline\":\"\",\"bidOpening\":\"\",\"delivery\":\"\",\"payment\":\"\",\"warranty\":\"\",\"ld\":\"\",\"coc\":\"\",\"emd\":\"\",\"bidValidity\":\"\",\"optionClause\":\"\",\"evaluation\":\"\",\"consignee\":\"\","
+      + "\"bom\":[{\"id\":1,\"materialCode\":\"\",\"pn\":\"\",\"desc\":\"\",\"mfr\":\"\",\"cat\":\"\",\"qty\":0,\"delivery\":\"\","
+      + "\"makes\":[{\"pn\":\"\",\"mfr\":\"\"}]}],"
+      + "\"tc\":[{\"label\":\"\",\"val\":\"\"}],\"compliance\":[{\"item\":\"\",\"req\":\"\",\"status\":\"ok\"}]} "
+      + "For makes[]: extract every approved manufacturer+partnumber combination listed under each line item. "
+      + "Set the top-level pn and mfr to the first/primary make. Keep tc to max 15 clauses, compliance to max 8 items.";
     try {
       const resp = await fetch("https://api.anthropic.com/v1/messages", {
         method:"POST",
-        headers:{ "Content-Type":"application/json", "x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
+        headers:{ "Content-Type":"application/json" },
         body: JSON.stringify({
           model:"claude-sonnet-4-6",
-          max_tokens:8000,
+          max_tokens:4000,
           messages:[{ role:"user", content:[
             { type:"document", source:{ type:"base64", media_type:"application/pdf", data:pdfB64 } },
             { type:"text", text:prompt }
@@ -262,7 +269,18 @@ export default function App() {
         evaluation:parsed.evaluation||"", consignee:parsed.consignee||"",
       });
       const bomData = (parsed.bom || []).map(function(r, i) {
-        return { id:r.id||i+1, pn:r.pn||"", desc:r.desc||"", mfr:r.mfr||"", cat:r.cat||"Component", qty:Number(r.qty)||0, delivery:r.delivery||"" };
+        var makes = (r.makes && r.makes.length > 0) ? r.makes : [{ pn: r.pn||"", mfr: r.mfr||"" }];
+        return {
+          id:           r.id || i+1,
+          materialCode: r.materialCode || "",
+          pn:           r.pn  || (makes[0] ? makes[0].pn  : ""),
+          desc:         r.desc || "",
+          mfr:          r.mfr  || (makes[0] ? makes[0].mfr : ""),
+          cat:          r.cat  || "Component",
+          qty:          Number(r.qty) || 0,
+          delivery:     r.delivery || "",
+          makes:        makes,
+        };
       });
       setBom(bomData);
       setPrices(bomData.map(function() { return { mouserPrice:null, e14Price:null, stock:"—" }; }));
@@ -291,34 +309,69 @@ export default function App() {
     const newPrices = prices.slice();
     for (var i = 0; i < bom.length; i++) {
       var r = bom[i];
-      addPLog("[" + (i+1) + "/" + bom.length + "] " + r.pn + " — " + r.mfr, "info");
-      try {
-        var resp = await fetch(workerUrl + "?action=price", {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
-          body: JSON.stringify({ pn: r.pn, mfr: r.mfr, qty: r.qty }),
-        });
-        if (!resp.ok) throw new Error("Worker HTTP " + resp.status);
-        var result = await resp.json();
-        if (result.error) throw new Error(result.error);
+      var makes = (r.makes && r.makes.length > 0) ? r.makes : [{ pn: r.pn, mfr: r.mfr }];
+      addPLog("[" + (i+1) + "/" + bom.length + "] " + r.desc + (r.materialCode ? " [" + r.materialCode + "]" : ""), "info");
+      addPLog("  Checking " + makes.length + " approved make(s): " + makes.map(function(m){ return m.pn; }).join(" · "), "info");
 
-        var allOffers = result.allOffers || [];
-        var mp = result.mouserPrice || null;
-        var ep = result.e14Price    || null;
+      var allMakeOffers = []; // all offers across all makes
+      var mouserPrice = null, e14Price = null, bestMake = null;
 
-        if (allOffers.length > 0 || mp || ep) {
-          var best = allOffers.length > 0 ? allOffers[0].priceINR : (mp || ep);
-          var bs   = allOffers.length > 0 ? allOffers[0].seller : (mp ? "Mouser" : "E14");
-          addPLog("✓ " + allOffers.length + " distributor(s) · Best: " + fmt(best) + " (" + bs + ") · Mouser: " + (mp ? fmt(mp) : "—") + " · E14: " + (ep ? fmt(ep) : "—"), "ok");
-          newPrices[i] = { mouserPrice: mp, e14Price: ep, stock: "Live", source: bs, allOffers: allOffers };
-        } else {
-          var dbg = result.debug ? JSON.stringify(result.debug) : "";
-          addPLog("⚠ " + r.pn + " — no results. " + dbg, "warn");
-          newPrices[i] = { mouserPrice: null, e14Price: null, stock: "Not found", source: "—", allOffers: [] };
+      for (var mi = 0; mi < makes.length; mi++) {
+        var make = makes[mi];
+        try {
+          var resp = await fetch(workerUrl + "?action=price", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ pn: make.pn, mfr: make.mfr, qty: r.qty }),
+          });
+          if (!resp.ok) throw new Error("Worker HTTP " + resp.status);
+          var result = await resp.json();
+          if (result.error) throw new Error(result.error);
+
+          var makeOffers = (result.allOffers || []).map(function(o) {
+            return Object.assign({}, o, { make: make.pn, makeMfr: make.mfr });
+          });
+          allMakeOffers = allMakeOffers.concat(makeOffers);
+
+          if (result.mouserPrice) {
+            addPLog("  ✓ " + make.pn + " · Mouser: " + fmt(result.mouserPrice) + (result.e14Price ? " · E14: " + fmt(result.e14Price) : ""), "ok");
+          } else if (makeOffers.length > 0) {
+            addPLog("  ✓ " + make.pn + " · Best: " + fmt(makeOffers[0].priceINR) + " (" + makeOffers[0].seller + ")", "ok");
+          } else {
+            addPLog("  ⚠ " + make.pn + " — not found", "warn");
+          }
+        } catch(e) {
+          addPLog("  ✗ " + make.pn + ": " + e.message, "err");
         }
-      } catch(e) {
-        addPLog("✗ " + r.pn + ": " + e.message, "err");
-        newPrices[i] = { mouserPrice: null, e14Price: null, stock: "Error", source: "—", allOffers: [] };
+      }
+
+      // Sort all offers across all makes — cheapest first
+      allMakeOffers.sort(function(a, b) { return a.priceINR - b.priceINR; });
+
+      if (allMakeOffers.length > 0) {
+        var cheapest = allMakeOffers[0];
+        // Recalculate mouserPrice/e14Price from best make's offers
+        for (var oi = 0; oi < allMakeOffers.length; oi++) {
+          var o = allMakeOffers[oi];
+          var sn = (o.seller || "").toLowerCase();
+          if (!mouserPrice && sn.indexOf("mouser") >= 0)    mouserPrice = o.priceINR;
+          if (!e14Price   && (sn.indexOf("element14") >= 0 || sn.indexOf("newark") >= 0 || sn.indexOf("farnell") >= 0)) e14Price = o.priceINR;
+        }
+        // If no Mouser/E14, use cheapest as mouserPrice slot
+        if (!mouserPrice && !e14Price) mouserPrice = cheapest.priceINR;
+        bestMake = cheapest.make || r.pn;
+        addPLog("✓ Best across all makes: " + fmt(cheapest.priceINR) + " (" + cheapest.make + " via " + cheapest.seller + ")", "ok");
+        newPrices[i] = {
+          mouserPrice: mouserPrice,
+          e14Price:    e14Price,
+          stock:       cheapest.stock + " pcs",
+          source:      cheapest.seller,
+          selectedMake: bestMake,
+          allOffers:   allMakeOffers,
+        };
+      } else {
+        addPLog("⚠ No prices found for any approved make on line " + r.id, "warn");
+        newPrices[i] = { mouserPrice:null, e14Price:null, stock:"Not found", source:"—", allOffers:[] };
       }
     }
     setPrices(newPrices);
@@ -351,61 +404,103 @@ export default function App() {
     return "yellow";
   }
 
-  async function logToAirtable() {
-    setAtState("loading");
-    addAtLog("Connecting to Airtable · Base: " + atBase, "info");
-    addAtLog("Table: \"" + atTable + "\"", "info");
-    const mfrs = [...new Set(bom.map(function(r) { return r.mfr; }).filter(Boolean))].join(", ");
-    const payload = {
-      "RFQ Number": rfq ? rfq.rfqNumber : "",
-      "Buyer": rfq ? rfq.buyer : "",
-      "Scope": rfq ? rfq.scope : "",
-      "Deadline": rfq ? rfq.deadline : "",
-      "BOM Lines": bom.length,
-      "Total Qty": bom.reduce(function(s, r) { return s + r.qty; }, 0),
-      "Estimated Bid Value (ex-GST)": Math.round(totals).toString(),
-      "EMD Amount": rfq ? rfq.emd : "",
-      "Status": "Sourcing",
-      "Delivery Terms": rfq ? rfq.delivery : "",
-      "Manufacturers": mfrs,
-      "Source": "Kestryl RFQ Pipeline v3",
-    };
-    try {
-      const resp = await fetch("https://api.anthropic.com/v1/messages", {
-        method:"POST",
-        headers:{ "Content-Type":"application/json", "x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
+  // ── Airtable REST API helpers ──────────────────────────────────────────────
+  const AT_BASE_ID  = "appAsHtfvYnOftbSa";
+  const AT_TABLE_ID = "tblc8XrcUhg3DcsHq";
+  const AT_FLD_PDF  = "fldNtRbapTLQfek56";
+  const AT_FLD_XLSX = "fldFNMJ8LWyiuS1jr";
+  const AT_PAT      = typeof __AIRTABLE_PAT__ !== "undefined" ? __AIRTABLE_PAT__ : "";
+
+  async function airtableRequest(method, path, body) {
+    const resp = await fetch("https://api.airtable.com/v0/" + path, {
+      method: method,
+      headers: {
+        "Authorization": "Bearer " + AT_PAT,
+        "Content-Type": "application/json",
+      },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    if (!resp.ok) throw new Error("Airtable API " + resp.status + ": " + await resp.text());
+    return resp.json();
+  }
+
+  async function uploadAttachmentToAirtable(recordId, fieldId, filename, base64data, mimeType) {
+    // Use Airtable's content upload endpoint
+    const resp = await fetch(
+      "https://content.airtable.com/v0/" + AT_BASE_ID + "/" + recordId + "/" + fieldId + "/uploadAttachment",
+      {
+        method: "POST",
+        headers: {
+          "Authorization": "Bearer " + AT_PAT,
+          "Content-Type": "application/json",
+        },
         body: JSON.stringify({
-          model:"claude-sonnet-4-6",
-          max_tokens:1000,
-          system:"You have Airtable MCP access. Create a record in base \"" + atBase + "\" table \"" + atTable + "\" (use closest matching table if name not found) with fields: " + JSON.stringify(payload) + ". Use typecast:true. Reply with \"RECORD_CREATED: [recordId]\" on its own line.",
-          messages:[{ role:"user", content:"Create the Airtable record now." }],
-          mcp_servers:[{ type:"url", url:"https://mcp.airtable.com/mcp", name:"airtable-mcp" }],
+          contentType: mimeType,
+          filename: filename,
+          file: base64data,
         }),
-      });
-      const data = await resp.json();
-      const textParts  = (data.content || []).filter(function(b) { return b.type === "text"; }).map(function(b) { return b.text; });
-      const toolParts  = (data.content || []).filter(function(b) { return b.type === "mcp_tool_result"; }).map(function(b) { return b.content && b.content[0] ? b.content[0].text : ""; });
-      const combined   = textParts.concat(toolParts).join("");
-      const m = combined.match(/rec[A-Za-z0-9]{14}/);
-      if (m) {
-        addAtLog("✓ Record created: " + m[0], "ok");
-        setAtRecordId(m[0]);
-        setAtState("done");
-      } else if (combined.toLowerCase().indexOf("creat") >= 0 || combined.toLowerCase().indexOf("success") >= 0) {
-        addAtLog("✓ Record created successfully", "ok");
-        setAtState("done");
-      } else {
-        addAtLog("⚠ " + combined.substring(0, 160), "warn");
-        setAtState("err");
       }
+    );
+    if (!resp.ok) throw new Error("Attachment upload failed: " + resp.status);
+    return resp.json();
+  }
+
+  async function logToAirtable() {
+    if (!AT_PAT) { addAtLog("⚠ Airtable PAT not configured — add VITE_AIRTABLE_PAT env var", "warn"); setAtState("err"); return; }
+    setAtState("loading");
+    addAtLog("Creating record in Kestryl RFQ Tracker…", "info");
+
+    const mfrs = [...new Set(bom.map(function(r) { return r.mfr; }).filter(Boolean))].join(", ");
+    const fields = {
+      "Tender Number":  rfq ? rfq.rfqNumber  : "",
+      "Customer":       rfq ? rfq.buyer       : "",
+      "Deadline":       rfq ? rfq.deadline    : "",
+      "Status":         "Pricing",
+    };
+
+    try {
+      // Step 1: Create the record
+      const created = await airtableRequest("POST", AT_BASE_ID + "/" + AT_TABLE_ID, {
+        records: [{ fields: fields }],
+        typecast: true,
+      });
+      const recordId = created.records[0].id;
+      addAtLog("✓ Record created: " + recordId, "ok");
+      setAtRecordId(recordId);
+
+      // Step 2: Upload RFQ PDF if available
+      if (pdfB64 && pdfFile) {
+        addAtLog("Uploading RFQ PDF…", "info");
+        try {
+          await uploadAttachmentToAirtable(recordId, AT_FLD_PDF, pdfFile.name, pdfB64, "application/pdf");
+          addAtLog("✓ RFQ PDF attached", "ok");
+        } catch(e) {
+          addAtLog("⚠ PDF upload failed: " + e.message, "warn");
+        }
+      }
+
+      // Step 3: Generate and upload XLSX
+      if (bom.length > 0) {
+        addAtLog("Generating and uploading bid workbook…", "info");
+        try {
+          const wb = generateWorkbook();
+          const xlsxData = XLSX.write(wb, { bookType: "xlsx", type: "base64" });
+          const fname = "Kestryl_Bid_" + (rfq ? rfq.rfqNumber : "RFQ").replace(/[\/\\:*?"<>|]/g, "_") + ".xlsx";
+          await uploadAttachmentToAirtable(recordId, AT_FLD_XLSX, fname, xlsxData, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+          addAtLog("✓ Bid workbook (.xlsx) attached", "ok");
+        } catch(e) {
+          addAtLog("⚠ XLSX upload failed: " + e.message, "warn");
+        }
+      }
+
+      setAtState("done");
     } catch(e) {
       addAtLog("✗ " + e.message, "err");
       setAtState("err");
     }
   }
 
-  function exportXLSX() {
-    if (!bom.length) { alert("No BOM data."); return; }
+  function generateWorkbook() {
     const wb = XLSX.utils.book_new();
 
     const bomRows = bom.map(function(r, i) {
@@ -471,6 +566,12 @@ export default function App() {
     ws5["!merges"] = [{ s:{r:0,c:0}, e:{r:0,c:1} }];
     XLSX.utils.book_append_sheet(wb, ws5, "Outcome Tracking");
 
+    return wb;
+  }
+
+  function exportXLSX() {
+    if (!bom.length) { alert("No BOM data."); return; }
+    const wb    = generateWorkbook();
     const fname = "Kestryl_Bid_" + (rfq ? rfq.rfqNumber : "RFQ").replace(/[\/\\:*?"<>|]/g, "_") + ".xlsx";
     XLSX.writeFile(wb, fname);
   }
@@ -585,15 +686,27 @@ export default function App() {
             <Panel title="Bill of Quantity" badge={<Tag c="green">✓ {bom.length} item{bom.length !== 1 ? "s" : ""}</Tag>} noPad>
               <div style={{ overflowX:"auto" }}>
                 <table style={{ width:"100%", borderCollapse:"collapse" }}>
-                  <thead><tr><Th>#</Th><Th>Part Number</Th><Th>Description</Th><Th>Manufacturer</Th><Th>Category</Th><Th>Qty</Th><Th>Delivery</Th></tr></thead>
+                  <thead><tr><Th>#</Th><Th>Material Code</Th><Th>Description</Th><Th>Approved Makes (MPN · Manufacturer)</Th><Th>Category</Th><Th>Qty</Th><Th>Delivery</Th></tr></thead>
                   <tbody>
                     {bom.map(function(r) {
+                      var makes = r.makes && r.makes.length > 0 ? r.makes : [{ pn: r.pn, mfr: r.mfr }];
                       return (
                         <tr key={r.id}>
                           <Td s={{ color:S.muted }}>{r.id}</Td>
-                          <Td s={{ color:S.accent, fontWeight:700 }}>{r.pn || "—"}</Td>
+                          <Td s={{ color:S.accent, fontWeight:700, fontSize:10 }}>{r.materialCode || r.pn || "—"}</Td>
                           <Td>{r.desc}</Td>
-                          <Td s={{ fontSize:11 }}>{r.mfr}</Td>
+                          <Td>
+                            <div style={{ display:"flex", flexDirection:"column", gap:3 }}>
+                              {makes.map(function(m, mi) {
+                                return (
+                                  <div key={mi} style={{ display:"flex", alignItems:"center", gap:6 }}>
+                                    <span style={{ background:"rgba(249,115,22,0.1)", border:"1px solid rgba(249,115,22,0.3)", borderRadius:4, padding:"1px 6px", fontSize:10, fontWeight:700, color:S.accent }}>{m.pn}</span>
+                                    <span style={{ fontSize:10, color:S.muted }}>{m.mfr}</span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </Td>
                           <Td><Tag c="blue">{r.cat}</Tag></Td>
                           <Td s={{ fontWeight:700 }}>{r.qty}</Td>
                           <Td s={{ fontSize:11, color:S.muted }}>{r.delivery}</Td>
@@ -677,10 +790,10 @@ export default function App() {
                     {/* Part header */}
                     <div style={{ padding:"12px 16px", display:"flex", alignItems:"center", gap:10, flexWrap:"wrap", background: hasPrice ? "rgba(34,197,94,0.03)" : "transparent" }}>
                       <span style={{ background:S.surface2, border:`1px solid ${S.border}`, borderRadius:4, padding:"2px 8px", fontSize:10, color:S.muted, fontWeight:700 }}>#{r.id}</span>
-                      <span style={{ fontWeight:700, color:S.accent, fontSize:13 }}>{r.pn}</span>
-                      <span style={{ fontSize:12, color:S.muted }}>{r.desc}</span>
-                      <span style={{ fontSize:11, color:S.muted }}>· {r.mfr}</span>
+                      {r.materialCode && <span style={{ fontSize:10, color:S.accent, fontWeight:700, fontFamily:"monospace" }}>{r.materialCode}</span>}
+                      <span style={{ fontSize:12, color:S.text }}>{r.desc}</span>
                       <span style={{ fontSize:11, color:S.muted }}>· Qty: <strong style={{color:S.text}}>{r.qty}</strong></span>
+                      {p.selectedMake && <span style={{ background:"rgba(34,197,94,0.1)", border:"1px solid rgba(34,197,94,0.3)", borderRadius:4, padding:"2px 8px", fontSize:10, fontWeight:700, color:S.green }}>✓ Selected: {p.selectedMake}</span>}
                       <span style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:12 }}>
                         {best > 0 && <span style={{ fontSize:15, fontWeight:700, color:S.green }}>Best: {fmt(best)}</span>}
                         {p.mouserPrice && <span style={{ fontSize:11, color:"#60a5fa" }}>Mouser: {fmt(p.mouserPrice)}</span>}
@@ -688,6 +801,20 @@ export default function App() {
                         {fetchState==="done" && !hasPrice && <span style={{ fontSize:11, color:S.yellow }}>⚠ Not found</span>}
                       </span>
                     </div>
+                    {/* Approved makes badges */}
+                    {r.makes && r.makes.length > 1 && (
+                      <div style={{ padding:"6px 16px", borderBottom:`1px solid ${S.border}`, display:"flex", gap:6, flexWrap:"wrap", alignItems:"center", background:"rgba(249,115,22,0.03)" }}>
+                        <span style={{ fontSize:10, color:S.muted, fontWeight:600 }}>APPROVED MAKES:</span>
+                        {r.makes.map(function(m, mi) {
+                          var isSelected = p.selectedMake === m.pn;
+                          return (
+                            <span key={mi} style={{ background: isSelected ? "rgba(34,197,94,0.15)" : S.surface2, border:"1px solid " + (isSelected ? "rgba(34,197,94,0.4)" : S.border), borderRadius:4, padding:"2px 8px", fontSize:10, fontWeight:600, color: isSelected ? S.green : S.muted }}>
+                              {m.pn} · {m.mfr}{isSelected ? " ✓" : ""}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    )}
 
                     {/* Distributor table */}
                     {allOffers.length > 0 && (
@@ -939,7 +1066,7 @@ export default function App() {
             </Panel>
             <div style={{ display:"flex", gap:10, justifyContent:"flex-end" }}>
               <Btn v="secondary" onClick={function(){setStep(4);}}>← Back</Btn>
-              <Btn v="green" onClick={function(){ alert("Pipeline complete for " + (rfq?rfq.rfqNumber:"this tender") + "\nBOM: " + bom.length + " items | Bid: " + fmt(totals.toFixed(0)) + " ex-GST\nDeadline: " + (rfq?rfq.deadline:"—") + "\n\nRecord logged to Airtable. Download .xlsx for submission reference."); }}>
+              <Btn v="green" onClick={function(){ sendPrompt("Pipeline complete for " + (rfq?rfq.rfqNumber:"this tender") + ". BOM: " + bom.length + " items, Bid: " + fmt(totals.toFixed(0)) + " ex-GST, Deadline: " + (rfq?rfq.deadline:"—") + ". What are my critical next steps?"); }}>
                 ✅ Complete — Get Submission Plan
               </Btn>
             </div>
